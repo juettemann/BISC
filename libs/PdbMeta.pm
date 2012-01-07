@@ -4,12 +4,12 @@ use 5.10.0;
 use strict;
 use warnings;
 
-use Digest::MD5::File qw(file_md5);
 use Log::Log4perl qw(get_logger);
 use Data::Dumper;
+use XML::LibXML;
 use Carp;
 
-use feature qw(switch say);
+#use feature qw(switch say);
 
 use constant UNIT  => {
   MONOMERIC      => 1, 
@@ -112,7 +112,7 @@ sub _getUnitValue {
   return($value);
 }
 ###############################################################################
-#                           getNumberOfBiomolecules
+#                           GetNumberOfBiomolecules
 ###############################################################################
 # REMARK 300 BIOMOLECULE: 1, 2
 sub getNumberOfBiomolecules {
@@ -123,7 +123,7 @@ sub getNumberOfBiomolecules {
   my @molecules;
   my $found = 0;
 
-  open(my $fh,'<', $file) or die "Can not open/access '$file'\n$!";
+  open(my $fh,'<', $file) or confess "Can not open/access '$file'\n$!";
   while(my $line = <$fh>){
     next unless ($line =~ /^REMARK 300 BIOMOLECULE:(.*)/);
     $found = 1;

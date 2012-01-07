@@ -1,18 +1,20 @@
 #!/usr/bin/perl
 
 use 5.10.0;
+
 use strict;
 use warnings;
 
-use Digest::MD5::File qw(file_md5);
 use Log::Log4perl qw(get_logger);
 use Data::Dumper;
 use XML::LibXML;
 use Carp;
 
+use feature qw(say);
+
 use PdbMeta;
 
-use feature qw(switch say);
+#use feature qw(switch say);
 
 my $file = 'pdb1fin.ent';
 my $meta  = PdbMeta->new();
@@ -21,18 +23,26 @@ my $meta  = PdbMeta->new();
 &main();
 
 sub main(){
-  my $cfg = XML::LibXML->new();
-#  my $entDir = $cfg->findvalue('/cfg/pdb_ent_dir');
+   my $parser = XML::LibXML->new();
+   my $cfg    = $parser->parse_file('config.xml');
+   my $entDir = $cfg->findvalue('/cfg/path/pdb_ent_dir');
 
-#  my $xray = identifyCrystalStructures($cfg->findvalue('/cfg/pdbaa'));
-  my $xray = identifyCrystalStructures('./pdbaa');
+  my $xray = identifyCrystalStructures($cfg->findvalue('/cfg/path/pdbaa'));
+  say 'Read '. keys(%{$xray}).' xray structures';
 
   foreach my $pdbID (sort keys %{$xray}){
     my $entFile = buildPdbFilePath($pdbID, 'ent');
+       $entFile = $entDir . $entFile;
+
     my $amountStructures = $meta->getNumberOfBiomolecules($entFile);
     confess "Error\n$entFile: $amountStructures" if(!$amountStructures);
+# test how many chains are in if only one
+# if more than one, test if chain names are duplicated, rewrite
+# copy results to new folder
     next if(scalar(@{$amountStructures}) == 1);
+    say $entFile;
     my $remark350 = $meta->parseRemark350($entFile);
+    print Dumper($remark350); die;
 
 
 # check if assemblies with different amount of chains exist.
@@ -48,7 +58,9 @@ sub main(){
 #print Dumper($amountStructures); 
 #print Dumper($remark350); 
   }
-
+sub _testForSingleChain {
+#use pdbaa 
+}
 
 }
 ###############################################################################
@@ -145,7 +157,7 @@ sub identifyCrystalStructures {
   my ($file) = @_;
   say $file;
   my $result;
-  open(my $fh,'<', $file) or die "Can not open/access '$file'\n$!";
+  open(my $fh,'<', $file) or confess "Can not open/access '$file'\n$!";
     while(my $line = <$fh>){
       next unless($line =~ />(\w{5})\s\d*\sXRAY/);
       my $pdbID = substr($1,0,4);
