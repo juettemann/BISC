@@ -12,75 +12,80 @@ use Carp;
 #use feature qw(switch say);
 
 use constant UNIT  => {
-  MONOMERIC      => 1, 
-  DIMERIC        => 2, 
-  TRIMERIC       => 3, 
-  TETRAMERIC     => 4, 
-  PENTAMERIC     => 5, 
-  HEXAMERIC      => 6, 
-  HEPTAMERIC     => 7, 
-  OCTAMERIC      => 8, 
-  NONAMERIC      => 9, 
-  DECAMERIC      => 10, 
-  UNDECAMERIC    => 11, 
-  DODECAMERIC    => 12, 
-  TRIDECAMERIC   => 13, 
-  TETRADECAMERIC => 14, 
-  PENTADECAMERIC => 15, 
-  HEXADECAMERIC  => 16, 
-  HEPTADECAMERIC => 17, 
-  OCTADECAMERIC  => 18, 
-  NONADECAMERIC  => 19, 
-  EICOSAMERIC    => 20 
+  MONOMERIC      => 1,
+  DIMERIC        => 2,
+  TRIMERIC       => 3,
+  TETRAMERIC     => 4,
+  PENTAMERIC     => 5,
+  HEXAMERIC      => 6,
+  HEPTAMERIC     => 7,
+  OCTAMERIC      => 8,
+  NONAMERIC      => 9,
+  DECAMERIC      => 10,
+  UNDECAMERIC    => 11,
+  DODECAMERIC    => 12,
+  TRIDECAMERIC   => 13,
+  TETRADECAMERIC => 14,
+  PENTADECAMERIC => 15,
+  HEXADECAMERIC  => 16,
+  HEPTADECAMERIC => 17,
+  OCTADECAMERIC  => 18,
+  NONADECAMERIC  => 19,
+  EICOSAMERIC    => 20
 };
 
 sub parseRemark350 {
   my ($self, $file) = @_;
-  
-  confess "File location is missing" if(!$file); 
-  confess "'$file' does not exists/not readable" if(! -T $file); 
-  
+
+  confess "File location is missing" if(!$file);
+  confess "'$file' does not exists/not readable" if(! -T $file);
+
   my ($id, $reading) = (0,0);
   my $result;
 
   open(my $fh,'<', $file) or die "Can not open/access '$file'\n$!";
     while(my $line = <$fh>){
       next unless ($line =~ /^REMARK/);
-      
-      if (!$reading && $line =~ /^REMARK 350 BIOMOLECULE: (\d+)/ ){
+
+      if (!$reading && $line =~ /^REMARK 350 BIOMOLECULE:\s+(\d+)/ ){
         $reading = 1;
         $id = $1;
+        say $id;
       }
-      elsif($reading && 
-          $line =~ /AUTHOR DETERMINED BIOLOGICAL UNIT: (.*)/) {
+      elsif($reading &&
+          $line =~ /AUTHOR DETERMINED BIOLOGICAL UNIT:\s+(.*)/) {
         confess $line if(!$1);
         $result->{$id}->{author} = _getUnitValue($1);
 
       }
-      elsif($reading && 
-          $line =~ /SOFTWARE DETERMINED QUATERNARY STRUCTURE: (.*)/) {
+      elsif($reading &&
+          $line =~ /SOFTWARE DETERMINED QUATERNARY STRUCTURE:\s+(.*)/) {
         confess $line if(!$1);
         $result->{$id}->{software} = _getUnitValue($1);
       }
-      elsif($reading && 
-          $line =~ /SOFTWARE USED: (\w+)/) {
+      elsif($reading &&
+          $line =~ /SOFTWARE USED:\s+(\w+)/) {
         $result->{$id}->{method} = $1;
       }
-      elsif($reading && 
-          $line =~ /TOTAL BURIED SURFACE AREA: (\d+)/) {
+      elsif($reading &&
+          $line =~ /TOTAL BURIED SURFACE AREA:\s+(\d+)/) {
         $result->{$id}->{buried} = $1;
       }
-      elsif($reading && 
-          $line =~ /SURFACE AREA OF THE COMPLEX: (\w+)/) {
+      elsif($reading &&
+          $line =~ /SURFACE AREA OF THE COMPLEX:\s+(\w+)/) {
         $result->{$id}->{surface} = $1;
       }
-      elsif($reading && 
-          $line =~ /CHANGE IN SOLVENT FREE ENERGY: (\S+) /) {
+      elsif($reading &&
+          $line =~ /CHANGE IN SOLVENT FREE ENERGY:\s+(\S+) /) {
         $result->{$id}->{energy} = $1;
       }
-      elsif($reading && 
+      elsif($reading &&
           $line =~ /^REMARK 350\s+$/){
         $reading = 0;
+      }
+      elsif($reading &&
+          $line =~ /^REMARK 350 BIOMOLECULE:\s+(\d+)/){
+        $id = $1;
       }
       else {
         $line =~ /REMARK\s*(\d{1,4})/;
@@ -117,8 +122,8 @@ sub _getUnitValue {
 # REMARK 300 BIOMOLECULE: 1, 2
 sub getNumberOfBiomolecules {
   my ($self, $file) = @_;
-  confess "File location is missing" if(!$file); 
-  confess "'$file' does not exists/not readable" if(! -T $file); 
+  confess "File location is missing" if(!$file);
+  confess "'$file' does not exists/not readable" if(! -T $file);
 
   my @molecules;
   my $found = 0;
@@ -161,7 +166,7 @@ sub getNumberOfBiomolecules {
       }
     }
   close($fh);
-    
+
   }
   return(\@molecules);
 }

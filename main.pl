@@ -13,55 +13,225 @@ use Carp;
 use feature qw(say);
 
 use PdbMeta;
+use PdbParser;
 
 #use feature qw(switch say);
 
 my $file = 'pdb1fin.ent';
 my $meta  = PdbMeta->new();
-
+my $parser = PdbParser->new();
 
 &main();
 
 sub main(){
-   my $parser = XML::LibXML->new();
-   my $cfg    = $parser->parse_file('config.xml');
+   my $xml_parser = XML::LibXML->new();
+   my $cfg    = $xml_parser->parse_file('config.xml');
    my $entDir = $cfg->findvalue('/cfg/path/pdb_ent_dir');
 
   my $xray = identifyCrystalStructures($cfg->findvalue('/cfg/path/pdbaa'));
   say 'Read '. keys(%{$xray}).' xray structures';
 
   foreach my $pdbID (sort keys %{$xray}){
+next unless($pdbID eq '2biw');
     my $entFile = buildPdbFilePath($pdbID, 'ent');
        $entFile = $entDir . $entFile;
-
-    my $amountStructures = $meta->getNumberOfBiomolecules($entFile);
-    confess "Error\n$entFile: $amountStructures" if(!$amountStructures);
+#say $entFile;
+    #How many biomolecules in the file?
+    my $remark350 = $meta->parseRemark350($entFile);
+    if(keys $remark350 > 1){
+      my ($size, $bioUnitID, $softwareInfo) =
+        _getBioMolecule($remark350, $entFile);
+      say "Size: $size, Unit: $bioUnitID, $softwareInfo";
+#How many chains in the biomolecule with the most chains
+      if($size > 1){
+        _buildBioUnitPath($cfg, $pdbID, $unit);
+        die;
+      }
+    }
+#    print Dumper($remark350); die;
+# Deprecated: my $amountStructures = $meta->getNumberOfBiomolecules($entFile);
+#    confess "Error\n$entFile: $amountStructures" if(!$amountStructures);
 # test how many chains are in if only one
 # if more than one, test if chain names are duplicated, rewrite
 # copy results to new folder
-    next if(scalar(@{$amountStructures}) == 1);
-    say $entFile;
-    my $remark350 = $meta->parseRemark350($entFile);
-    print Dumper($remark350); die;
 
+#   if(scalar(@{$amountStructures}) == 1) {
+#    my($chains, $chains2array_pos) = $parser->readChains($entFile);
+#    if (scalar(@{$chains}) > 1){
+# check if chain IDs are duplicated, replace
+# write new file to new directory
 
-# check if assemblies with different amount of chains exist.
-# get the one with more chains if
-# if several with the same amount of chains exists, use the one with lowest energy
-# 
-# read chain section, check if chain IDs have been used multiple times
-# if so, rename keep relation
-# split, identify interacting files
-# homo/hetero distinction
-# cluster
-
-#print Dumper($amountStructures); 
-#print Dumper($remark350); 
+#    }
+#print Dumper($chains);
+#    print Dumper($chains2array_pos);
+#    die;
+#   }
   }
-sub _testForSingleChain {
-#use pdbaa 
+}
+###############################################################################
+#
+###############################################################################
+# /home/tmp/BISC/pdb/data/biounit/coordinates/divided/bi/2biw.pdb1.gz
+sub _buildBioUnitPath {
+  my ($cfg, $pdbID, $unit) = @_;
+  my $bioUnitDir = $cfg->findvalue('/cfg/path/pdb_biounit_dir');
+
+  my $subDir = substr($pdbID,1,2);
+  my $path = "$subDir/$pdbID.pdb.$unit";
+  my $gz_path = "$subDir/$pdbID.pdb.$unit.gz";
+  if (-e $gz_path){
+    my $args = "gunzip $gz_path";
+    system($args) == 0 or die $args;
+  }
+  return($path);
+
+}
+###############################################################################
+#                             _FindBestStructure
+###############################################################################
+# The largest biomolecule will be chosen
+sub _getBioMolecule {
+  my ($remark350, $entFile) = @_;
+
+  my $tmp;
+
+  foreach my $molNo (sort keys %{$remark350}){
+
+    my ($software, $softwareInfo) = _buildSoftwareInfo($remark350->{$molNo});
+    my ($author);
+
+    if(exists $remark350->{$molNo}->{author}){
+      $author = $remark350->{$molNo}->{author};
+    }
+# In software we trust
+    if(defined $software && defined $author ){
+# check if author and software agree
+      if ($author != $software){
+        warn "$entFile difference between author and software";
+        if($author>$software){
+          push( @{$tmp->{$author}},"$molNo:a");
+        }
+        else {
+          push( @{$tmp->{$software}},"$molNo:$softwareInfo");
+        }
+      }
+      else {
+        push( @{$tmp->{$software}},"$molNo:$softwareInfo");
+      }
+    }
+    elsif(exists $remark350->{$molNo}->{software}){
+      push( @{$tmp->{$software}},"$molNo:$softwareInfo");
+    }
+    elsif(exists $remark350->{$molNo}->{author}){
+      push( @{$tmp->{$author}},"$molNo:a");
+    }
+    else{
+      die "PDB always has a surprise left...";
+    }
+  }
+  my ($size, $biomolecule, $softwareInfo) = _chooseBestBioMolecule($tmp);
 }
 
+###############################################################################
+#
+###############################################################################
+sub _chooseBestBioMolecule {
+  my ($tmp) = @_;
+# Find largest structure, pick on with this hierachy:
+# 1st choice: PISA, 2nd: Author, 3rd: PQS
+  foreach my $size (reverse sort {$a <=> $b} keys %{$tmp}){
+#say "Size: $size";
+#print Dumper($tmp->{$size});
+    for my $bioMol (@{$tmp->{$size}}){
+      if($bioMol =~ /(\d+):s:(PISA:.*)$/){
+        return ($size, $1, $2);
+      }
+    }
+#No PISA found, try author
+    for my $bioMol (@{$tmp->{$size}}){
+      if($bioMol =~ /(\d+):a/){
+        return ($size, $1, 0);
+      }
+    }
+#No author found, try PQS
+    for my $bioMol (@{$tmp->{$size}}){
+#      say "PQS: $bioMol";
+      if($bioMol =~ /(\d+):s:(PQS:.*)$/){
+        return ($size, $1, $2);
+      }
+    }
+    die "PDB always has a surprise left...";
+  }
+  last;
+}
+
+###############################################################################
+#
+###############################################################################
+# Get as much information from the used software as possible
+sub _buildSoftwareInfo {
+  my ($record) = @_;
+  my ($software,
+      $method,
+      $energy,
+      $buried,
+      $surface,
+      $softwareInfo
+     ) = (0, 0, 0, 0, 0, 0);
+
+  if(exists $record->{software}){
+    $software = $record->{software};
+    if (exists $record->{method}){
+      $method = $record->{method}
+    }
+    if (exists $record->{energy}){
+      $energy = $record->{energy}
+    }
+    if (exists $record->{buried}){
+      $buried = $record->{buried}
+    }
+    if (exists $record->{surface}){
+      $surface = $record->{surface}
+    }
+    $softwareInfo = "s:$method:$energy:$buried:$surface";
+  }
+  return($software, $softwareInfo);
+}
+
+###############################################################################
+#
+###############################################################################
+sub _renameDuplicates {
+  my ($chains2array_pos, $chains) = @_;
+
+  # leave only chains as potential new ones that are not present yet
+  my @range = ('A'..'Z', 'a'..'z', 0..9);
+  my @chainsInPdb = sort keys($chains2array_pos);
+  for my $chain(@chainsInPdb) {
+    @range = grep { $_ ne $chain } @range;
+  }
+  # One never knows...
+  return(0) if( scalar(@range) < 1);
+
+  foreach my $chain (sort keys %{$chains2array_pos}){
+    # same chain ID more than once in assembly
+    my $size = scalar @{$chains2array_pos->{$chain}};
+    if($size > 1){
+      return (0) if($size > scalar(@range) );
+      # leave 1st chain as it is, change all following
+      for(my $i = 1; $i < $size; $i++) {
+        my $index       = $chains2array_pos->[$i];
+        my $chainRecord = $chains->[$index];
+        my $newChain    = shift(@range);
+        my @newRecord;
+        for my $row(@{$chainRecord}) {
+          say $row;
+          $row = substr($row,21,1,$newChain);
+          say $row;
+        }
+      }
+    }
+  }
 }
 ###############################################################################
 #                                   _findLargestAssembly
@@ -86,11 +256,11 @@ sub _findLargestAssembly {
 # Compare if they are a) more chains than former molecule b) delta G is lower
   foreach my $unit (sort keys %{$remark350}){
 
-    if( (exists $remark350->{$unit}->{author}) && 
+    if( (exists $remark350->{$unit}->{author}) &&
         (exists $remark350->{$unit}->{software}) ){
 
       if($remark350->{$unit}->{author} != $remark350->{$unit}->{software}){
-        die "Different, check it" 
+        die "Different, check it"
       }
 
       if($remark350->{$unit}->{software} > $last->{chains}){
@@ -99,7 +269,7 @@ sub _findLargestAssembly {
         $last->{biounit} = $remark350->{$unit}->{biounit};
       }
       if($remark350->{$unit}->{software} = $last->{chains}){
-        if(defined $remark350->{$unit}->{energy} and 
+        if(defined $remark350->{$unit}->{energy} and
             $remark350->{$unit}->{energy} < $last->{energy}){
 
           $last->{energy}  = $remark350->{$unit}->{energy};
@@ -117,7 +287,7 @@ sub _findLargestAssembly {
         $last->{biounit}  = $remark350->{$unit}->{biounit};
       }
       if($remark350->{$unit}->{software} =  $last->{chains}){
-        if(defined $remark350->{$unit}->{energy} and 
+        if(defined $remark350->{$unit}->{energy} and
             $remark350->{$unit}->{energy} < $last->{energy}){
           $last->{chains} = $remark350->{$unit}->{software};
           $last->{energy}   = $remark350->{$unit}->{energy};
@@ -202,14 +372,14 @@ Thomas Juettemann <juettemann@gmail.com>
 
 =head1 DESCRIPTION
 
-B<script.pl> 
+B<script.pl>
 
 =head1 BUGS
 
 =over 4
 
 =item None known
- 
+
 =back
 
 =head1 TODO
