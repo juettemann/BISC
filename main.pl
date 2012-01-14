@@ -8,6 +8,7 @@ use warnings;
 use Log::Log4perl qw(get_logger);
 use Data::Dumper;
 use XML::LibXML;
+ use File::Path qw(make_path);
 use Carp;
 
 use feature qw(say);
@@ -30,24 +31,100 @@ sub main(){
 
   my $xray = identifyCrystalStructures($cfg->findvalue('/cfg/path/pdbaa'));
   say 'Read '. keys(%{$xray}).' xray structures';
-
+#No REMARK 300 or 350 in 1qjb
+# 2j0u should be monomeric or dimeric, but contains 3 chains
   foreach my $pdbID (sort keys %{$xray}){
-next unless($pdbID eq '2biw');
+next if ($pdbID =~ /^(1qjb)|(2j0u)$/);
+#next unless($pdbID eq '2wdb');
+    say "Started: $pdbID";
     my $entFile = buildPdbFilePath($pdbID, 'ent');
        $entFile = $entDir . $entFile;
-#say $entFile;
+say $entFile;
+
     #How many biomolecules in the file?
     my $remark350 = $meta->parseRemark350($entFile);
+next unless keys $remark350 > 1;
+    # More than one biomolecule, we need to identify the best one
     if(keys $remark350 > 1){
       my ($size, $bioUnitID, $softwareInfo) =
         _getBioMolecule($remark350, $entFile);
-      say "Size: $size, Unit: $bioUnitID, $softwareInfo";
-#How many chains in the biomolecule with the most chains
+        print Dumper($remark350);
+
+        say "$size, $bioUnitID, $softwareInfo";
+      #How many chains in the biomolecule that has the most chains
       if($size > 1){
-        _buildBioUnitPath($cfg, $pdbID, $unit);
-        die;
+        my $biounit = _buildBioUnitPath($cfg, $pdbID, $bioUnitID);
+        say "BioUnit: $biounit";
+
+      }
+    }# more than 1 biomolecule available
+    # Only 1 biomolecule
+    else{
+      my $biounit = _buildBioUnitPath($cfg, $pdbID, 1);
+      my($chains, $chains2array_pos) = $parser->readChains($entFile);
+      if(keys $chains2array_pos > 1){
+#        print Dumper($chains);
+        _renameDuplicates($chains2array_pos, $chains);
+#        print Dumper($chains2array_pos);die;
+# Build path
+# rename duplicates
+        _splitFiles($cfg,$pdbID,$chains);
       }
     }
+  }
+}
+###############################################################################
+#                           RewriteChains2array_pos
+###############################################################################
+sub rewriteChains2array_pos {
+  my ($chains2array_pos, $chains) = @_;
+#emptying hash
+  for (keys %{$chains2array_pos}) { delete $chains2array_pos->{$_} }
+
+  my $size = scalar(@{$chains});
+  for (my $i = 0; $i < $size ; $i++) {
+    for my $line (@{$chains->[$i]}){
+      my $chain = substr($line, 21, 1);
+      push(@{$chains2array_pos->{$chain}}, $i);
+      last;
+    }
+  }
+}
+###############################################################################
+#
+###############################################################################
+sub _splitFiles {
+  my ($cfg, $pdbID, $chains,$chains2array_pos) = @_;
+  my $path = $cfg->findvalue('/cfg/path/splitFiles');
+  $path   .= "$pdbID/";
+  make_path($path,{verbose => 1});
+
+  my $size = scalar(@{$chains});
+#  print Dumper($chains);
+  for (my $outside = 0 ; $outside < $size ; $outside++) {
+    my $chainA = substr($chains->[$outside]->[0], 21, 1);
+    my $file_single = "$path/$pdbID" . "_$chainA.pdb" ;
+    my $a = join("\n",@{$chains->[$outside]});
+    open(my $fh,'>', $file_single) or die "Can not open/access '$file_single'\n$!";
+      say $fh $a;
+      say $fh 'END';
+    close($fh);
+    for (my $inside = $outside + 1 ; $inside < $size ; $inside++) {
+      my $chainB = substr($chains->[$inside]->[0], 21, 1);
+      my $file_complex = "$path/$pdbID" . "_$chainA"."$chainB.pdb" ;
+      my $b = join("\n",@{$chains->[$inside]});
+      open(my $fh,'>', $file_complex) or die "Can not open/access '$file_complex'\n$!";
+        say $fh $a;
+        say $fh 'TER';
+        say $fh $b;
+        say $fh 'END';
+      close($fh);
+
+
+    }
+  }
+
+}
 #    print Dumper($remark350); die;
 # Deprecated: my $amountStructures = $meta->getNumberOfBiomolecules($entFile);
 #    confess "Error\n$entFile: $amountStructures" if(!$amountStructures);
@@ -66,12 +143,11 @@ next unless($pdbID eq '2biw');
 #    print Dumper($chains2array_pos);
 #    die;
 #   }
-  }
-}
 ###############################################################################
 #
 ###############################################################################
 # /home/tmp/BISC/pdb/data/biounit/coordinates/divided/bi/2biw.pdb1.gz
+###############################################################################
 sub _buildBioUnitPath {
   my ($cfg, $pdbID, $unit) = @_;
   my $bioUnitDir = $cfg->findvalue('/cfg/path/pdb_biounit_dir');
@@ -90,6 +166,7 @@ sub _buildBioUnitPath {
 #                             _FindBestStructure
 ###############################################################################
 # The largest biomolecule will be chosen
+###############################################################################
 sub _getBioMolecule {
   my ($remark350, $entFile) = @_;
 
@@ -104,11 +181,11 @@ sub _getBioMolecule {
       $author = $remark350->{$molNo}->{author};
     }
 # In software we trust
-    if(defined $software && defined $author ){
+    if($software && $author ){
 # check if author and software agree
       if ($author != $software){
         warn "$entFile difference between author and software";
-        if($author>$software){
+        if($author > $software){
           push( @{$tmp->{$author}},"$molNo:a");
         }
         else {
@@ -133,7 +210,17 @@ sub _getBioMolecule {
 }
 
 ###############################################################################
+#                           _ChooseBestBioMolecule
+###############################################################################
 #
+#$VAR1 = {
+#          '1' => [
+#                   '1:s:PQS:N/A:N/A:N/A',
+#                   '2:s:PQS:N/A:N/A:N/A',
+#                   '3:s:PQS:N/A:N/A:N/A',
+#                   '4:s:PQS:N/A:N/A:N/A'
+#                 ]
+#        };
 ###############################################################################
 sub _chooseBestBioMolecule {
   my ($tmp) = @_;
@@ -160,15 +247,22 @@ sub _chooseBestBioMolecule {
         return ($size, $1, $2);
       }
     }
+# Unknown software used (e.g.: pdb2wdb.ent)
+    for my $bioMol (@{$tmp->{$size}}){
+      if($bioMol =~ /(\d+):s:/){
+        return ($size, $1, 0);
+      }
+    }
     die "PDB always has a surprise left...";
   }
   last;
 }
 
 ###############################################################################
-#
+#                             _BuildSoftwareInfo
 ###############################################################################
 # Get as much information from the used software as possible
+###############################################################################
 sub _buildSoftwareInfo {
   my ($record) = @_;
   my ($software,
@@ -199,11 +293,21 @@ sub _buildSoftwareInfo {
 }
 
 ###############################################################################
-#
+#                             _RenameDuplicates
+###############################################################################
+# $VAR1 = {
+#           'A' => [
+#                    0
+#                  ],
+#           'B' => [
+#                    1
+#                  ]
+#         };
 ###############################################################################
 sub _renameDuplicates {
   my ($chains2array_pos, $chains) = @_;
 
+  # @range contains the available new IDs
   # leave only chains as potential new ones that are not present yet
   my @range = ('A'..'Z', 'a'..'z', 0..9);
   my @chainsInPdb = sort keys($chains2array_pos);
@@ -216,98 +320,29 @@ sub _renameDuplicates {
   foreach my $chain (sort keys %{$chains2array_pos}){
     # same chain ID more than once in assembly
     my $size = scalar @{$chains2array_pos->{$chain}};
-    if($size > 1){
-      return (0) if($size > scalar(@range) );
-      # leave 1st chain as it is, change all following
-      for(my $i = 1; $i < $size; $i++) {
-        my $index       = $chains2array_pos->[$i];
-        my $chainRecord = $chains->[$index];
-        my $newChain    = shift(@range);
-        my @newRecord;
-        for my $row(@{$chainRecord}) {
-          say $row;
-          $row = substr($row,21,1,$newChain);
-          say $row;
-        }
+    next if($size == 1);
+
+    return (0) if($size > scalar(@range) );
+# leave 1st chain as it is, change all following
+    for(my $i = 1; $i < $size; $i++) {
+      my $index       = $chains2array_pos->[$i];
+      my $chainRecord = $chains->[$index];
+      my $newChain    = shift(@range);
+      my @newRecord;
+      for my $row(@{$chainRecord}) {
+        say $row;
+        $row = substr($row,21,1,$newChain);
+        say $row;
+        die;
       }
     }
   }
+
+  rewriteChains2array_pos($chains2array_pos, $chains);
 }
 ###############################################################################
-#                                   _findLargestAssembly
+#                             BuildPdbFilePath
 ###############################################################################
-# Identify the largest assembly with the lowest free energy in PDB ent files
-# In many cases, the file contains this remark:
-# REMARK 300 BIOMOLECULE: 1, 2
-# The numbers seem to concure to the PDB files available in the biounit sub-
-# directory. Parsing REMARK 350, that should be available in all files,
-# the assembly/structure with the most chains/lowest free energy is identified
-# It is also checked if author and software agree on the biounit
-
-###############################################################################
-sub _findLargestAssembly {
-  my ($remark350) = @_;
-  my $last;
-  $last->{chains} = 0;
-  $last->{energy} = 1000;
-  $last->{biounit} = 0;
-# Check if both author and software determined values exists for molecules
-# Compare if they are equal
-# Compare if they are a) more chains than former molecule b) delta G is lower
-  foreach my $unit (sort keys %{$remark350}){
-
-    if( (exists $remark350->{$unit}->{author}) &&
-        (exists $remark350->{$unit}->{software}) ){
-
-      if($remark350->{$unit}->{author} != $remark350->{$unit}->{software}){
-        die "Different, check it"
-      }
-
-      if($remark350->{$unit}->{software} > $last->{chains}){
-        $last->{chains}  = $remark350->{$unit}->{software};
-        $last->{energy}  = $remark350->{$unit}->{energy};
-        $last->{biounit} = $remark350->{$unit}->{biounit};
-      }
-      if($remark350->{$unit}->{software} = $last->{chains}){
-        if(defined $remark350->{$unit}->{energy} and
-            $remark350->{$unit}->{energy} < $last->{energy}){
-
-          $last->{energy}  = $remark350->{$unit}->{energy};
-          $last->{biounit} = $remark350->{$unit}->{biounit};
-        }
-      }
-      next;
-    }
-# If only software exists, only replace if more chains or equal chains and lower gibbs
-# ToDo: PISA/PQS
-    if(exists $remark350->{$unit}->{software}){
-      if($remark350->{$unit}->{software} > $last->{chains}){
-        $last->{chains} = $remark350->{$unit}->{software};
-        $last->{energy}   = $remark350->{$unit}->{energy};
-        $last->{biounit}  = $remark350->{$unit}->{biounit};
-      }
-      if($remark350->{$unit}->{software} =  $last->{chains}){
-        if(defined $remark350->{$unit}->{energy} and
-            $remark350->{$unit}->{energy} < $last->{energy}){
-          $last->{chains} = $remark350->{$unit}->{software};
-          $last->{energy}   = $remark350->{$unit}->{energy};
-          $last->{biounit}  = $remark350->{$unit}->{biounit};
-        }
-      }
-      next;
-    }
-#
-    if(exists $remark350->{$unit}->{author}){
-      if($remark350->{$unit}->{author} > $last->{chains}){
-        $last->{chains}   = $remark350->{$unit}->{author};
-        $last->{energy}   = $remark350->{$unit}->{energy};
-        $last->{biounit}  = $remark350->{$unit}->{biounit};
-      }
-      next;
-    }
-  }
-}
-
 # 1fnt-> fn/1nft
 sub buildPdbFilePath {
   my ($pdbID,$type) = @_;
@@ -320,12 +355,16 @@ sub buildPdbFilePath {
   return($path);
 
 }
+###############################################################################
+#                         IdentifyCrystalStructures
+###############################################################################
 # read pdbaa, keep crystal structures
-#>200LA 164 XRAY
-#PDB+chain ID given, return only PDB ID in lowercase
+# >200LA 164 XRAY
+# PDB+chain ID given, return only PDB ID in lowercase
+###############################################################################
 sub identifyCrystalStructures {
   my ($file) = @_;
-  say $file;
+
   my $result;
   open(my $fh,'<', $file) or confess "Can not open/access '$file'\n$!";
     while(my $line = <$fh>){
@@ -336,8 +375,6 @@ sub identifyCrystalStructures {
     }
   close($fh);
 return($result);
-
-
 }
 =head1 NAME
 

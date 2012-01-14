@@ -13,8 +13,11 @@ use Carp;
 
 use constant UNIT  => {
   MONOMERIC      => 1,
+  MONMERIC       => 1,
   DIMERIC        => 2,
+  DIMER          => 2,
   TRIMERIC       => 3,
+  TRIMER         => 3,
   TETRAMERIC     => 4,
   PENTAMERIC     => 5,
   HEXAMERIC      => 6,
@@ -28,10 +31,12 @@ use constant UNIT  => {
   TETRADECAMERIC => 14,
   PENTADECAMERIC => 15,
   HEXADECAMERIC  => 16,
+  HEXADECAMRIC   => 16,
   HEPTADECAMERIC => 17,
   OCTADECAMERIC  => 18,
   NONADECAMERIC  => 19,
-  EICOSAMERIC    => 20
+  EICOSAMERIC    => 20,
+  '22MERIC'      => 22,
 };
 
 sub parseRemark350 {
@@ -50,16 +55,16 @@ sub parseRemark350 {
       if (!$reading && $line =~ /^REMARK 350 BIOMOLECULE:\s+(\d+)/ ){
         $reading = 1;
         $id = $1;
-        say $id;
       }
       elsif($reading &&
-          $line =~ /AUTHOR DETERMINED BIOLOGICAL UNIT:\s+(.*)/) {
-        confess $line if(!$1);
+          $line =~ /AUTHOR DETERMINED BIOLOGICAL UNIT:\s+(\S*)/) {
+        # 2yhn has nothing assigned
+        $result->{$id}->{author} = 0 if(!$1);
         $result->{$id}->{author} = _getUnitValue($1);
 
       }
       elsif($reading &&
-          $line =~ /SOFTWARE DETERMINED QUATERNARY STRUCTURE:\s+(.*)/) {
+          $line =~ /SOFTWARE DETERMINED QUATERNARY STRUCTURE:\s+(\S*)/) {
         confess $line if(!$1);
         $result->{$id}->{software} = _getUnitValue($1);
       }
@@ -89,6 +94,9 @@ sub parseRemark350 {
       }
       else {
         $line =~ /REMARK\s*(\d{1,4})/;
+        if(!$result && $reading){
+          $result->{$id}->{author} = $id;
+        }
         my $remark = $1;
         last if($remark > 350);
       }
@@ -104,9 +112,10 @@ sub _getUnitValue {
   my ($unit) = @_;
   confess "Unit missing" if(!$unit);
   $unit =~ s/\s//g;
+  $unit =~ s/;//g;
 
   my $value;
-  if($unit =~ /^(\d\d+)-MERIC$/){
+  if($unit =~ /^(\d\d+)-?MERIC$/){
     $value = $1;
   }
   elsif($unit =~ /^(\w+)$/) {
