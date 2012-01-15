@@ -6,9 +6,10 @@ use strict;
 use warnings;
 
 use Log::Log4perl qw(get_logger);
+use File::Path qw(make_path);
+use Parallel::ForkManager;
 use Data::Dumper;
 use XML::LibXML;
- use File::Path qw(make_path);
 use Carp;
 
 use feature qw(say);
@@ -17,25 +18,34 @@ use PdbMeta;
 use PdbParser;
 
 #use feature qw(switch say);
+use constant MAX_PROCESSES => 4;
 
 my $file = 'pdb1fin.ent';
 my $meta  = PdbMeta->new();
 my $parser = PdbParser->new();
 
 &main();
-
+###############################################################################
+#
+###############################################################################
 sub main(){
-   my $xml_parser = XML::LibXML->new();
-   my $cfg    = $xml_parser->parse_file('config.xml');
-   my $entDir = $cfg->findvalue('/cfg/path/pdb_ent_dir');
+  my $pm          = new Parallel::ForkManager(MAX_PROCESSES);
+  my $xml_parser  = XML::LibXML->new();
+  my $cfg         = $xml_parser->parse_file('config.xml');
+  my $entDir      = $cfg->findvalue('/cfg/path/pdb_ent_dir');
 
   my $xray = identifyCrystalStructures($cfg->findvalue('/cfg/path/pdbaa'));
   say 'Read '. keys(%{$xray}).' xray structures';
-#No REMARK 300 or 350 in 1qjb
-# 2j0u should be monomeric or dimeric, but contains 3 chains
+
+  # No REMARK 300 or 350 in 1qjb
+  # 2j0u should be monomeric or dimeric, but contains 3 chains
   foreach my $pdbID (sort keys %{$xray}){
-next if ($pdbID =~ /^(1qjb)|(2j0u)$/);
-#next unless($pdbID eq '2wdb');
+    my $pid = $pm->start and next;
+    if ($pdbID =~ /^(1qjb)|(2j0u)$/) {
+      $pm->finish;
+      next;
+    }
+#next unless($pdbID eq '3q6d');
     say "Started: $pdbID";
     my $entFile = buildPdbFilePath($pdbID, 'ent');
        $entFile = $entDir . $entFile;
@@ -43,35 +53,46 @@ say $entFile;
 
     #How many biomolecules in the file?
     my $remark350 = $meta->parseRemark350($entFile);
-next unless keys $remark350 > 1;
+    #next unless keys $remark350 > 1;
     # More than one biomolecule, we need to identify the best one
     if(keys $remark350 > 1){
       my ($size, $bioUnitID, $softwareInfo) =
         _getBioMolecule($remark350, $entFile);
-        print Dumper($remark350);
 
-        say "$size, $bioUnitID, $softwareInfo";
-      #How many chains in the biomolecule that has the most chains
+      # How many chains in the biomolecule that has the most chains
+      # Obviously only continue if more than 1 chain
       if($size > 1){
-        my $biounit = _buildBioUnitPath($cfg, $pdbID, $bioUnitID);
-        say "BioUnit: $biounit";
+        _createBinaryFiles($cfg, $pdbID, $bioUnitID, $entFile);
 
       }
     }# more than 1 biomolecule available
     # Only 1 biomolecule
     else{
-      my $biounit = _buildBioUnitPath($cfg, $pdbID, 1);
-      my($chains, $chains2array_pos) = $parser->readChains($entFile);
-      if(keys $chains2array_pos > 1){
+      my $bioUnitID = 1;
+      _createBinaryFiles($cfg, $pdbID, $bioUnitID, $entFile);
+    }
+    $pm->finish;
+  }
+  $pm->wait_all_children;
+}
+###############################################################################
+#                               _CreateBinaryFiles
+###############################################################################
+sub _createBinaryFiles {
+  my ($cfg, $pdbID, $bioUnitID, $entFile) = @_;
+
+  my $biounit = _buildBioUnitPath($cfg, $pdbID, $bioUnitID);
+  my($chains, $chains2array_pos) = $parser->readChains($entFile);
+  if(keys $chains2array_pos > 1){
 #        print Dumper($chains);
-        _renameDuplicates($chains2array_pos, $chains);
+    my $renamed = _renameDuplicates($chains2array_pos, $chains);
+    die $entFile if(!$renamed);
 #        print Dumper($chains2array_pos);die;
 # Build path
 # rename duplicates
-        _splitFiles($cfg,$pdbID,$chains);
-      }
-    }
+    _splitFiles($cfg,$pdbID,$chains);
   }
+
 }
 ###############################################################################
 #                           RewriteChains2array_pos
@@ -91,12 +112,13 @@ sub rewriteChains2array_pos {
   }
 }
 ###############################################################################
-#
+#                                 _SplitFiles
 ###############################################################################
 sub _splitFiles {
   my ($cfg, $pdbID, $chains,$chains2array_pos) = @_;
   my $path = $cfg->findvalue('/cfg/path/splitFiles');
-  $path   .= "$pdbID/";
+  my $dir = substr($pdbID,1,2);
+  $path   .= "$dir/$pdbID";
   make_path($path,{verbose => 1});
 
   my $size = scalar(@{$chains});
@@ -105,21 +127,24 @@ sub _splitFiles {
     my $chainA = substr($chains->[$outside]->[0], 21, 1);
     my $file_single = "$path/$pdbID" . "_$chainA.pdb" ;
     my $a = join("\n",@{$chains->[$outside]});
-    open(my $fh,'>', $file_single) or die "Can not open/access '$file_single'\n$!";
-      say $fh $a;
-      say $fh 'END';
-    close($fh);
+    if(!-T $file_single){
+      open(my $fh,'>', $file_single) or die "Can not open/access '$file_single'\n$!";
+        say $fh $a;
+        say $fh 'END';
+      close($fh);
+    }
     for (my $inside = $outside + 1 ; $inside < $size ; $inside++) {
       my $chainB = substr($chains->[$inside]->[0], 21, 1);
       my $file_complex = "$path/$pdbID" . "_$chainA"."$chainB.pdb" ;
-      my $b = join("\n",@{$chains->[$inside]});
-      open(my $fh,'>', $file_complex) or die "Can not open/access '$file_complex'\n$!";
-        say $fh $a;
-        say $fh 'TER';
-        say $fh $b;
-        say $fh 'END';
-      close($fh);
-
+      if(!-T $file_complex){
+        my $b = join("\n",@{$chains->[$inside]});
+        open(my $fh,'>', $file_complex) or die "Can not open/access '$file_complex'\n$!";
+          say $fh $a;
+          say $fh 'TER';
+          say $fh $b;
+          say $fh 'END';
+        close($fh);
+      }
 
     }
   }
@@ -166,6 +191,12 @@ sub _buildBioUnitPath {
 #                             _FindBestStructure
 ###############################################################################
 # The largest biomolecule will be chosen
+# So far the biomolecule with the most chains is chosen
+# Hierachy:
+# PISA, Author, PQS, unknown Software.
+#
+# To Do: In case of PISA, the structure with the lowest energy should be
+# chosen
 ###############################################################################
 sub _getBioMolecule {
   my ($remark350, $entFile) = @_;
@@ -207,6 +238,7 @@ sub _getBioMolecule {
     }
   }
   my ($size, $biomolecule, $softwareInfo) = _chooseBestBioMolecule($tmp);
+  return($size, $biomolecule, $softwareInfo);
 }
 
 ###############################################################################
@@ -321,6 +353,10 @@ sub _renameDuplicates {
     # same chain ID more than once in assembly
     my $size = scalar @{$chains2array_pos->{$chain}};
     next if($size == 1);
+    say $chain;
+    print Dumper($chains2array_pos);
+    print Dumper($chains2array_pos->{$chain});
+    die;
 
     return (0) if($size > scalar(@range) );
 # leave 1st chain as it is, change all following
@@ -339,6 +375,7 @@ sub _renameDuplicates {
   }
 
   rewriteChains2array_pos($chains2array_pos, $chains);
+  return(1);
 }
 ###############################################################################
 #                             BuildPdbFilePath

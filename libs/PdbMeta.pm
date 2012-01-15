@@ -10,8 +10,9 @@ use XML::LibXML;
 use Carp;
 
 #use feature qw(switch say);
-
+# pdb3q6d.ent has unknown
 use constant UNIT  => {
+  UNKNOWN        => 0,
   MONOMERIC      => 1,
   MONMERIC       => 1,
   DIMERIC        => 2,
@@ -59,9 +60,12 @@ sub parseRemark350 {
       elsif($reading &&
           $line =~ /AUTHOR DETERMINED BIOLOGICAL UNIT:\s+(\S*)/) {
         # 2yhn has nothing assigned
-        $result->{$id}->{author} = 0 if(!$1);
-        $result->{$id}->{author} = _getUnitValue($1);
-
+        if(!$1){
+          $result->{$id}->{author} = 0
+        }
+        else {
+          $result->{$id}->{author} = _getUnitValue($1);
+        }
       }
       elsif($reading &&
           $line =~ /SOFTWARE DETERMINED QUATERNARY STRUCTURE:\s+(\S*)/) {
@@ -120,7 +124,7 @@ sub _getUnitValue {
   }
   elsif($unit =~ /^(\w+)$/) {
     $value = UNIT->{$1};
-    die "'$value' not defined in lookup" if(!$value);
+    confess "'$value' not defined in lookup" if(not defined $value);
   }
   else{die "Something odd with $unit"}
   return($value);
