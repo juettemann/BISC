@@ -14,10 +14,9 @@ pod2usage if ($ARGV[0] && ($ARGV[0] eq '-h' or $ARGV[0] eq '--help'));
 our $pdbaa = new Pdbaa;
 our $pm = new Parallel::ForkManager(4);
 
-use constant STARTDIR   => '/home/tmp/BISC/update/subcomplexes/pisa/';
-#use constant STARTDIR  => '/home/tmp/BISC/update/subcomplexes/pdb/';
+use constant STARTDIR  => '/home/tmp/BISC/splitFiles2/';
 use constant NACCESS    => '/home/tmp/BISC/naccess2.1.1/naccess';
-use constant LOGFILE    => '/home/tmp/BISC/scripts/2010/runNaccess.log';
+use constant LOGFILE    => './runNaccess.log';
 
 
 &main();
@@ -27,17 +26,20 @@ sub main(){
    select((select(LOG), $|=1)[0]);
 
    my $AR = $pdbaa->parseDir(STARTDIR,'\w\w');
-
    @{$AR} = sort(@{$AR});
 
    for my $sdir (@{$AR}){
-      $pm->start and next;
-      print LOG "STARTED: $sdir\n";
-      my $path = STARTDIR . "$sdir/";
-      my $ARfiles1 = $pdbaa->parseDir($path,'\w{4}_\w\.pdb');
-      my $ARfiles2 = $pdbaa->parseDir($path,'\w{4}_\w\w\.pdb');
+     my $subdir = STARTDIR . $sdir;
+     my $dirs = $pdbaa->parseDir($subdir,'\w\w\w\w');
+     @{$dirs} = sort(@{$dirs});
+     for my $dir (@{$dirs}){
+       $pm->start and next;
+       print LOG "STARTED: $dir\n";
+       my $path = STARTDIR . "$sdir/$dir/";
+       my $ARfiles1 = $pdbaa->parseDir($path,'\w{4}_\w\.pdb');
+       my $ARfiles2 = $pdbaa->parseDir($path,'\w{4}_\w\w\.pdb');
 
-      for my $pdbFile (@{$ARfiles1}){
+       for my $pdbFile (@{$ARfiles1}){
          my $Lpdb = $path . $pdbFile;
          my $LnaccessLog = $Lpdb;
          my $LnaccessRsa = $Lpdb;
@@ -46,11 +48,11 @@ sub main(){
          $LnaccessRsa =~ s/pdb$/rsa/;
 
          if ( (not -T $LnaccessLog)  ||  (not -T $LnaccessRsa) ){
-            chdir($path);
-            &executeNaccess($Lpdb);
+           chdir($path);
+           &executeNaccess($Lpdb);
          }
-      }
-      for my $pdbFile (@{$ARfiles2}){
+       }
+       for my $pdbFile (@{$ARfiles2}){
          my $Lpdb = $path . $pdbFile;
          my $LnaccessLog = $Lpdb;
          my $LnaccessRsa = $Lpdb;
@@ -59,12 +61,13 @@ sub main(){
          $LnaccessRsa =~ s/pdb$/rsa/;
 
          if ( (not -T $LnaccessLog)  ||  (not -T $LnaccessRsa) ){
-            chdir($path);
-            &executeNaccess($Lpdb);
+           chdir($path);
+           &executeNaccess($Lpdb);
          }
-      }
-      print LOG "Finished $sdir\n";
-      $pm->finish;
+       }
+       print LOG "Finished $dir\n";
+       $pm->finish;
+     }
    }
    $pm->wait_all_children;
   close(LOG);
